@@ -16,35 +16,29 @@ from telegram.ext import (
 try:
     import google.generativeai as genai
 except ImportError:
-    # Эта ошибка сработает, если забыли добавить библиотеку в requirements.txt
     print("Ошибка: Библиотека 'google-generativeai' не установлена.")
     exit()
 
-# --- КОНФИГУРАЦИЯ И КЛЮЧИ (БЕРУТСЯ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ RENDER) ---
-
+# --- КОНФИГУРАЦИЯ ---
+# Базовый ключ (администратора/владельца)
+DEFAULT_GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN') 
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY') 
 
-# Проверка, что ключи получены
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    logging.error("⛔ ОШИБКА: TELEGRAM_TOKEN или GEMINI_API_KEY не найдены в переменных окружения Render.")
-    # Принудительно завершаем скрипт, чтобы Render показал ошибку
-    exit(1) 
+if not TELEGRAM_TOKEN:
+    logging.error("⛔ ОШИБКА: TELEGRAM_TOKEN не найден.")
+    exit(1)
 
-# Настройка Gemini
-genai.configure(api_key=GEMINI_API_KEY)
+# --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (ХРАНИЛИЩЕ В ПАМЯТИ) ---
+# ВНИМАНИЕ: При перезагрузке Render эти данные сотрутся!
+user_models = {}      # {user_id: "model_name"}
+user_api_keys = {}    # {user_id: "sk-..."}
+chats = {}            # {user_id: chat_session_object}
 
-# --- СПИСОК МОДЕЛЕЙ ---
 AVAILABLE_MODELS = {
     "gemini-3-pro": "gemini-3-pro-preview",
     "nano-banana": "gemini-3-pro-image",
     "gemini-flash": "gemini-2.5-flash"
 }
-
-# Хранилище настроек пользователей: {user_id: "model_id"}
-user_models = {}
-# Хранилище истории чатов: {user_id: chat_session_object}
-chats = {}
 
 # Логирование
 logging.basicConfig(
@@ -52,7 +46,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# --- ФУНКЦИИ КЛАВИАТУРЫ ---
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
 def get_model_keyboard():
     keyboard = [
@@ -62,23 +56,93 @@ def get_model_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# --- КОМАНДЫ И ХЕНДЛЕРЫ ---
+def configure_genai_for_user(user_id):
+    """Настраивает Gemini на ключ конкретного пользователя или дефолтный."""
+    # Берем личный ключ, если есть, иначе общий
+    api_key = user_api_keys.get(user_id, DEFAULT_GEMINI_KEY)
+    
+    if not api_key:
+        raise ValueError("API Key не найден. Используйте /setkey или настройте переменные окружения.")
+        
+    genai.configure(api_key=api_key)
+    return api_key
+
+def get_chat_session(user_id, model_name):
+    # Если сессии нет или модель сменилась — создаем новую
+    if user_id not in chats or chats[user_id].model != model_name:
+        configure_genai_for_user(user_id) # Важно настроить ключ перед созданием модели
+        model = genai.GenerativeModel(model_name)
+        chats[user_id] = model.start_chat(history=[])
+    return chats[user_id]
+
+# --- КОМАНДЫ ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_models:
         user_models[user_id] = "gemini-2.5-flash"
     
-    await update.message.reply_text(
-        f"👋 Привет! Я обновлен до **Gemini 3**.\n\n"
-        f"Текущая модель: {user_models.get(user_id)}\n\n"
-        "Нажми /model чтобы переключить мозг.\n"
-        "Отправь фото, файл или текст.",
-        parse_mode=ParseMode.MARKDOWN
+    msg = (
+        f"👋 **Привет! Я бот на базе Gemini 3.**\n\n"
+        f"🤖 Текущая модель: `{user_models.get(user_id)}`\n"
+        f"🔑 Твой API ключ: {'✅ Установлен' if user_id in user_api_keys else '❌ Используется общий'}\n\n"
+        "**Команды:**\n"
+        "🧹 /clear — **Очистить контекст** (начать новый диалог)\n"
+        "🧠 /model — **Сменить модель** (Flash, Pro, Image)\n"
+        "🔑 /setkey `ваш_ключ` — Установить свой API ключ\n"
+        "🗑 /delkey — Удалить свой API ключ\n"
+        "ℹ️ /start — Показать это меню\n\n"
+        "👇 Просто отправь текст, фото или файл."
     )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+async def clear_context(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in chats:
+        del chats[user_id]
+        await update.message.reply_text("🧹 **Память очищена!** Я забыл всё, о чем мы говорили ранее. Начинаем с чистого листа.", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text("🧹 Память и так пуста.")
+
+async def set_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    try:
+        # Получаем текст после команды /setkey
+        key = context.args[0] if context.args else None
+        if not key:
+            await update.message.reply_text("⚠️ Использование: `/setkey AIzaSy...`", parse_mode=ParseMode.MARKDOWN)
+            return
+
+        user_api_keys[user_id] = key
+        # Сбрасываем текущий чат, чтобы он пересоздался с новым ключом
+        if user_id in chats:
+            del chats[user_id]
+            
+        await update.message.reply_text("✅ **API ключ сохранен!** Теперь запросы идут через него.\n\n⚠️ _Примечание: При перезагрузке бота ключ сбросится._", parse_mode=ParseMode.MARKDOWN)
+        
+        # В целях безопасности можно попробовать удалить сообщение пользователя с ключом
+        try:
+            await update.message.delete()
+        except:
+            pass # Если нет прав на удаление
+            
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+async def del_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in user_api_keys:
+        del user_api_keys[user_id]
+        if user_id in chats:
+            del chats[user_id]
+        await update.message.reply_text("🗑 **Ваш API ключ удален.** Возвращаюсь на общий ключ бота.", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text("У вас и так не установлен личный ключ.")
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Выберите модель Gemini:", reply_markup=get_model_keyboard())
+    await update.message.reply_text("🧠 Выберите модель Gemini:", reply_markup=get_model_keyboard())
+
+# --- ОБРАБОТЧИКИ КНОПОК И СООБЩЕНИЙ ---
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -91,18 +155,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         real_model_name = AVAILABLE_MODELS.get(model_alias, "gemini-2.5-flash")
         user_models[user_id] = real_model_name
         
+        # Сбрасываем чат при смене модели
         if user_id in chats:
             del chats[user_id]
             
-        await query.edit_message_text(text=f"✅ Готово! Переключился {model_alias.upper()}**\nID: {real_model_name}", parse_mode=ParseMode.MARKDOWN)
-
-# --- ЛОГИКА ГЕНЕРАЦИИ (ПОМОЩНИКИ) ---
-
-def get_chat_session(user_id, model_name):
-    if user_id not in chats or chats[user_id].model != model_name:
-        model = genai.GenerativeModel(model_name)
-        chats[user_id] = model.start_chat(history=[])
-    return chats[user_id]
+        await query.edit_message_text(
+            text=f"✅ Готово! Переключился на **{model_alias.upper()}**\nID: `{real_model_name}`\nКонтекст сброшен.", 
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -112,81 +172,91 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-    # ИСПРАВЛЕННЫЙ БЛОК: Отступы выровнены внутри функции
     try:
+        # 1. Настраиваем ключ (важно делать это перед каждым запросом в такой архитектуре)
+        configure_genai_for_user(user_id)
+        
+        # 2. Получаем сессию
         chat = get_chat_session(user_id, current_model_name)
+        
+        # 3. Отправляем запрос
         response = chat.send_message(user_text)
         
+        # 4. Отправляем ответ (с разбивкой на длинные сообщения)
         response_text = response.text
         if len(response_text) > 4000:
-            await update.message.reply_text(response_text[:4000], parse_mode=ParseMode.MARKDOWN)
-            await update.message.reply_text(response_text[4000:], parse_mode=ParseMode.MARKDOWN)
+            for x in range(0, len(response_text), 4000):
+                await update.message.reply_text(response_text[x:x+4000], parse_mode=ParseMode.MARKDOWN)
         else:
             await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         error_msg = str(e)
-        logging.error(f"Ошибка при обработке сообщения: {e}")
-        if "404" in error_msg or "not found" in error_msg:
-            await update.message.reply_text(f"⚠️ Модель {current_model_name} недоступна. Попробуй Flash через /model.")
+        logging.error(f"Ошибка ({user_id}): {e}")
+        
+        if "API key" in error_msg or "403" in error_msg:
+             await update.message.reply_text("⛔ **Ошибка доступа.** Проверьте ваш API ключ (/setkey) или лимиты.", parse_mode=ParseMode.MARKDOWN)
+        elif "429" in error_msg:
+             await update.message.reply_text("⏳ **Слишком много запросов.** Google просит подождать.", parse_mode=ParseMode.MARKDOWN)
+        elif "404" in error_msg:
+             await update.message.reply_text(f"⚠️ Модель {current_model_name} недоступна (возможно, нужен платный аккаунт). Попробуй Flash.", parse_mode=ParseMode.MARKDOWN)
         else:
-            await update.message.reply_text(f"Ошибка Gemini: {e}")
+            await update.message.reply_text(f"Ошибка: {e}")
 
 async def handle_multimodal_content(update: Update, context: ContextTypes.DEFAULT_TYPE, is_photo: bool):
     user_id = update.effective_user.id
     current_model_name = user_models.get(user_id, "gemini-2.5-flash")
     
-    # Определяем тип файла и действие
     if is_photo:
         file_handle = update.message.photo[-1]
         action = ChatAction.UPLOAD_PHOTO
         file_ext = ".jpg"
-        prompt_default = "Проанализируй это изображение детально."
-    else: # Document
+        prompt_default = "Опиши, что на изображении."
+    else: 
         file_handle = update.message.document
         action = ChatAction.UPLOAD_DOCUMENT
         file_ext = os.path.splitext(file_handle.file_name)[1]
-        prompt_default = "Проанализируй этот файл и сделай краткое резюме."
+        prompt_default = "Проанализируй этот файл."
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=action)
 
     telegram_file = await file_handle.get_file()
-    # Создаем уникальное имя файла на сервере Render
     file_path = f"temp_{user_id}_{telegram_file.file_unique_id}{file_ext}"
     await telegram_file.download_to_drive(file_path)
 
     uploaded_file = None
     try:
-        # Загружаем файл в Gemini File API
+        configure_genai_for_user(user_id) # Настраиваем ключ
+        
         uploaded_file = genai.upload_file(path=file_path)
         
+        # Ожидание обработки
         while uploaded_file.state.name == "PROCESSING":
             await asyncio.sleep(1)
             uploaded_file = genai.get_file(uploaded_file.name)
         
         if uploaded_file.state.name == "FAILED":
-            raise ValueError("Google не смог обработать этот файл.")
+            raise ValueError("Google File API error.")
 
         prompt = update.message.caption if update.message.caption else prompt_default
         
-        # Генерируем контент
-        vision_model = genai.GenerativeModel(current_model_name)
-        response = vision_model.generate_content([prompt, uploaded_file])
+        # Для vision запросов используем generate_content, а не чат-сессию (обычно проще)
+        model = genai.GenerativeModel(current_model_name)
+        response = model.generate_content([prompt, uploaded_file])
         
         await update.message.reply_text(response.text, parse_mode=ParseMode.MARKDOWN)
         
     except Exception as e:
-        logging.error(f"Ошибка мультимодальной обработки: {e}")
-        await update.message.reply_text(f"Ошибка обработки файла: {e}")
+        logging.error(f"Media Error: {e}")
+        await update.message.reply_text(f"Ошибка обработки медиа: {e}")
     finally:
-        # 3. Чистим
         if uploaded_file:
             try:
-                genai.delete_file(uploaded_file.name) # Удаляем с серверов Gemini
-            except Exception as cleanup_e:
-                logging.warning(f"Не удалось удалить файл Gemini: {cleanup_e}")
+                genai.delete_file(uploaded_file.name)
+            except:
+                pass
         if os.path.exists(file_path):
-            os.remove(file_path) # Удаляем с сервера Render
+            os.remove(file_path)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await handle_multimodal_content(update, context, is_photo=True)
@@ -196,21 +266,25 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- ЗАПУСК ---
-# ИСПРАВЛЕНО: Было 'if name', должно быть 'if __name__'
 if __name__ == '__main__':
     logging.info("Инициализация бота...")
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Хендлеры команд и кнопок
+    # Команды
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('model', model_command))
+    application.add_handler(CommandHandler('setkey', set_key)) # Новое
+    application.add_handler(CommandHandler('delkey', del_key)) # Новое
+    application.add_handler(CommandHandler('clear', clear_context)) # Новое
+    application.add_handler(CommandHandler('reset', clear_context)) # Алиас
+    
+    # Кнопки
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    # Хендлеры контента
+    # Сообщения
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
-    logging.info(f"Бот запущен. Токен: {'***' + TELEGRAM_TOKEN[-4:]}")
-    # Run polling - запускает бота в режиме ожидания сообщений
+    logging.info(f"Бот запущен.")
     application.run_polling(poll_interval=1.0)
