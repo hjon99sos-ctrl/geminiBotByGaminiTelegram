@@ -1,4 +1,4 @@
-облакасодержащий, [30.11.2025 13:24]
+
 import os
 import logging
 import asyncio
@@ -113,7 +113,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-облакасодержащий, [30.11.2025 13:24]
+
 try:
         chat = get_chat_session(user_id, current_model_name)
         response = chat.send_message(user_text)
@@ -204,7 +204,6 @@ if name == 'main':
     # Хендлеры команд и кнопок
     application.add_handler(CommandHandler('start', start))
 
-облакасодержащий, [30.11.2025 13:24]
 application.add_handler(CommandHandler('model', model_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
@@ -215,4 +214,5 @@ application.add_handler(CommandHandler('model', model_command))
     
     logging.info(f"Бот запущен. Токен: {'***' + TELEGRAM_TOKEN[-4:]}")
     # Run polling - запускает бота в режиме ожидания сообщений
+
     application.run_polling(poll_interval=1.0)
