@@ -95,7 +95,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in chats:
             del chats[user_id]
             
-        await query.edit_message_text(text=f"✅ Готово! Переключился {model_alias.upper()})}**\nID: {real_model_name}", parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(text=f"✅ Готово! Переключился {model_alias.upper()}**\nID: {real_model_name}", parse_mode=ParseMode.MARKDOWN)
 
 # --- ЛОГИКА ГЕНЕРАЦИИ (ПОМОЩНИКИ) ---
 
@@ -216,3 +216,4 @@ application.add_handler(CommandHandler('model', model_command))
     # Run polling - запускает бота в режиме ожидания сообщений
 
     application.run_polling(poll_interval=1.0)
+
