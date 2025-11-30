@@ -1,4 +1,3 @@
-
 import os
 import logging
 import asyncio
@@ -113,25 +112,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-
-try:
+    # ИСПРАВЛЕННЫЙ БЛОК: Отступы выровнены внутри функции
+    try:
         chat = get_chat_session(user_id, current_model_name)
         response = chat.send_message(user_text)
         
         response_text = response.text
         if len(response_text) > 4000:
-             await update.message.reply_text(response_text[:4000], parse_mode=ParseMode.MARKDOWN)
-             await update.message.reply_text(response_text[4000:], parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(response_text[:4000], parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(response_text[4000:], parse_mode=ParseMode.MARKDOWN)
         else:
-             await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         error_msg = str(e)
         logging.error(f"Ошибка при обработке сообщения: {e}")
         if "404" in error_msg or "not found" in error_msg:
-             await update.message.reply_text(f"⚠️ Модель {current_model_name} недоступна. Попробуй Flash через /model.")
+            await update.message.reply_text(f"⚠️ Модель {current_model_name} недоступна. Попробуй Flash через /model.")
         else:
-             await update.message.reply_text(f"Ошибка Gemini: {e}")
+            await update.message.reply_text(f"Ошибка Gemini: {e}")
 
 async def handle_multimodal_content(update: Update, context: ContextTypes.DEFAULT_TYPE, is_photo: bool):
     user_id = update.effective_user.id
@@ -162,11 +161,11 @@ async def handle_multimodal_content(update: Update, context: ContextTypes.DEFAUL
         uploaded_file = genai.upload_file(path=file_path)
         
         while uploaded_file.state.name == "PROCESSING":
-             await asyncio.sleep(1)
-             uploaded_file = genai.get_file(uploaded_file.name)
+            await asyncio.sleep(1)
+            uploaded_file = genai.get_file(uploaded_file.name)
         
         if uploaded_file.state.name == "FAILED":
-             raise ValueError("Google не смог обработать этот файл.")
+            raise ValueError("Google не смог обработать этот файл.")
 
         prompt = update.message.caption if update.message.caption else prompt_default
         
@@ -182,10 +181,10 @@ async def handle_multimodal_content(update: Update, context: ContextTypes.DEFAUL
     finally:
         # 3. Чистим
         if uploaded_file:
-             try:
-                 genai.delete_file(uploaded_file.name) # Удаляем с серверов Gemini
-             except Exception as cleanup_e:
-                 logging.warning(f"Не удалось удалить файл Gemini: {cleanup_e}")
+            try:
+                genai.delete_file(uploaded_file.name) # Удаляем с серверов Gemini
+            except Exception as cleanup_e:
+                logging.warning(f"Не удалось удалить файл Gemini: {cleanup_e}")
         if os.path.exists(file_path):
             os.remove(file_path) # Удаляем с сервера Render
 
@@ -197,14 +196,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --- ЗАПУСК ---
-if name == 'main':
+# ИСПРАВЛЕНО: Было 'if name', должно быть 'if __name__'
+if __name__ == '__main__':
     logging.info("Инициализация бота...")
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # Хендлеры команд и кнопок
     application.add_handler(CommandHandler('start', start))
-
-application.add_handler(CommandHandler('model', model_command))
+    application.add_handler(CommandHandler('model', model_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
     # Хендлеры контента
@@ -214,6 +213,4 @@ application.add_handler(CommandHandler('model', model_command))
     
     logging.info(f"Бот запущен. Токен: {'***' + TELEGRAM_TOKEN[-4:]}")
     # Run polling - запускает бота в режиме ожидания сообщений
-
     application.run_polling(poll_interval=1.0)
-
